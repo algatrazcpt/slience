@@ -188,5 +188,6 @@ public class PlayerMovement : MonoBehaviour
     public void SetSurface(SurfaceType surface)
     {
         currentSurface = surface;
+        Debug.Log(currentSurface.ToString());
     }
 }

@@ -22,5 +22,8 @@ public enum PlayerDirection
 public enum SurfaceType
 {
     Ground,
-    Water
+    Metal,
+    Water,
+    Glass,
+    Grass
 }
