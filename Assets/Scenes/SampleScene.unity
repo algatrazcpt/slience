@@ -133,7 +133,6 @@ GameObject:
   - component: {fileID: 261984862}
   - component: {fileID: 261984864}
   - component: {fileID: 261984861}
-  - component: {fileID: 261984865}
   m_Layer: 0
   m_Name: PlayerSprite
   m_TagString: Untagged
@@ -326,25 +325,6 @@ CapsuleCollider2D:
   m_Offset: {x: 0, y: 0}
   m_Size: {x: 1, y: 2}
   m_Direction: 0
---- !u!114 &261984865
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 261984858}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 688c2bc52505faf4da06bdfcccb9141a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PlayerNoiseSystem
-  playerMovement: {fileID: 261984861}
-  noiseCollider: {fileID: 744093023}
-  crouchNoise: 1
-  slowWalkNoise: 2
-  walkNoise: 4
-  runNoise: 7
-  waterMultiplier: 2
 --- !u!1 &314825224
 GameObject:
   m_ObjectHideFlags: 0
@@ -655,6 +635,7 @@ GameObject:
   m_Component:
   - component: {fileID: 744093022}
   - component: {fileID: 744093023}
+  - component: {fileID: 744093024}
   m_Layer: 0
   m_Name: NoiseCircle
   m_TagString: Untagged
@@ -713,6 +694,24 @@ CircleCollider2D:
   m_CompositeOrder: 0
   m_Offset: {x: 0, y: 0}
   m_Radius: 0.5
+--- !u!114 &744093024
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 744093021}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a50dcd587cecfa244967e83870fe3678, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PlayerSoundEmitter
+  movement: {fileID: 261984861}
+  crouchRadius: 1
+  slowWalkRadius: 2
+  walkRadius: 3.5
+  runRadius: 6
+  smoothSpeed: 12
 --- !u!1 &803264602
 GameObject:
   m_ObjectHideFlags: 0
