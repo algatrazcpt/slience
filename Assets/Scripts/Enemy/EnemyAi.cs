@@ -1,9 +1,30 @@
 using UnityEngine;
+using UnityEngine.Events;
+
 
 [RequireComponent(typeof(Rigidbody2D))]
 public class EnemyAI : MonoBehaviour
 {
     public enum EnemyState { Idle, Chase, Search, Return }
+
+    public enum StartDirection
+    {
+        Up, Down, Left, Right,
+        UpLeft, UpRight, DownLeft, DownRight,
+        Custom
+    }
+    [Header("Saldırı")]
+    [SerializeField] private EnemyAttack attack;
+
+
+
+
+
+
+
+    [Header("Fark Etme")]
+    public UnityEvent onNoticedPlayer; // Chase'e ilk geçtiği an (ünlem efekti, ses vs. için)
+
 
     [Header("Algı Tipi")]
     [SerializeField] private bool canHear = true;
@@ -14,7 +35,11 @@ public class EnemyAI : MonoBehaviour
     [SerializeField] private float viewDistance = 6f;
     [SerializeField, Range(10f, 360f)] private float viewAngle = 90f;
     [SerializeField] private LayerMask obstacleMask; // Duvarlar vs. (oyuncu layer'ı EKLEME)
-    [SerializeField] private Vector2 startFacing = Vector2.down;
+
+    [Header("Başlangıç Yönü")]
+    [SerializeField] private StartDirection startDirection = StartDirection.Down;
+    [Tooltip("Sadece StartDirection = Custom iken kullanılır. 0 = sağ, 90 = yukarı, 180 = sol, 270 = aşağı")]
+    [SerializeField, Range(0f, 360f)] private float customAngle = 0f;
 
     [Header("Hız")]
     [SerializeField] private float chaseSpeed = 3.5f;
@@ -53,7 +78,28 @@ public class EnemyAI : MonoBehaviour
         }
 
         startPosition = rb.position;
-        facingDirection = startFacing.normalized;
+        facingDirection = GetStartFacing();
+        if (attack == null)
+            attack = GetComponent<EnemyAttack>();
+    }
+
+    private Vector2 GetStartFacing()
+    {
+        return startDirection switch
+        {
+            StartDirection.Up => Vector2.up,
+            StartDirection.Down => Vector2.down,
+            StartDirection.Left => Vector2.left,
+            StartDirection.Right => Vector2.right,
+            StartDirection.UpLeft => new Vector2(-1, 1).normalized,
+            StartDirection.UpRight => new Vector2(1, 1).normalized,
+            StartDirection.DownLeft => new Vector2(-1, -1).normalized,
+            StartDirection.DownRight => new Vector2(1, -1).normalized,
+            StartDirection.Custom => new Vector2(
+                                            Mathf.Cos(customAngle * Mathf.Deg2Rad),
+                                            Mathf.Sin(customAngle * Mathf.Deg2Rad)),
+            _ => Vector2.down
+        };
     }
 
     // SES: player'ın ses collider'ı düşmana değerse
@@ -62,8 +108,7 @@ public class EnemyAI : MonoBehaviour
         if (!canHear) return;
         if (!other.TryGetComponent<PlayerSoundEmitter>(out _)) return;
 
-        targetPosition = other.transform.position;
-        currentState = EnemyState.Chase;
+        Notice(other.transform.position);
     }
 
     private void FixedUpdate()
@@ -71,12 +116,16 @@ public class EnemyAI : MonoBehaviour
         // GÖRME
         IsSeeingPlayer = canSee && CheckVision();
         if (IsSeeingPlayer)
-        {
-            targetPosition = player.position;
-            currentState = EnemyState.Chase;
-        }
+            Notice(player.position);
 
         moveVelocity = Vector2.zero;
+        if (HandleAttack())
+        {
+            rb.linearVelocity = Vector2.zero;
+            UpdateAnimation();
+            return;
+        }
+
 
         switch (currentState)
         {
@@ -100,7 +149,7 @@ public class EnemyAI : MonoBehaviour
             case EnemyState.Return:
                 if (MoveTo(startPosition, returnSpeed))
                 {
-                    facingDirection = startFacing.normalized;
+                    facingDirection = GetStartFacing(); // başlangıç yönüne geri dön
                     currentState = EnemyState.Idle;
                 }
                 break;
@@ -134,6 +183,29 @@ public class EnemyAI : MonoBehaviour
         return true;
     }
 
+    // TEMAS: player'ın gövdesine çarparsa fark eder
+    private void OnCollisionEnter2D(Collision2D collision) => TouchCheck(collision.collider);
+    private void OnCollisionStay2D(Collision2D collision) => TouchCheck(collision.collider);
+
+    private void TouchCheck(Collider2D other)
+    {
+        var pm = other.GetComponentInParent<PlayerMovement>();
+        if (pm == null) return;
+
+        Notice(pm.transform.position);
+    }
+
+    // Duyma, görme, temas hepsi buraya çıkıyor
+    private void Notice(Vector2 position)
+    {
+        if (currentState != EnemyState.Chase)
+            onNoticedPlayer?.Invoke();
+
+        targetPosition = position;
+        currentState = EnemyState.Chase;
+    }
+
+
     // Hedefe vardıysa true döner
     private bool MoveTo(Vector2 target, float speed)
     {
@@ -160,7 +232,8 @@ public class EnemyAI : MonoBehaviour
     {
         if (!canSee) return;
 
-        Vector2 facing = Application.isPlaying ? facingDirection : startFacing.normalized;
+        // Edit modunda dropdown'dan seçtiğin yönü anında gösterir
+        Vector2 facing = Application.isPlaying ? facingDirection : GetStartFacing();
         float half = viewAngle * 0.5f;
 
         Gizmos.color = IsSeeingPlayer ? Color.red : Color.green;
@@ -169,6 +242,30 @@ public class EnemyAI : MonoBehaviour
 
         Gizmos.DrawLine(transform.position, transform.position + left);
         Gizmos.DrawLine(transform.position, transform.position + right);
-        Gizmos.DrawWireSphere(transform.position, viewDistance);
+        Gizmos.DrawLine(transform.position + left, transform.position + right);
     }
+    // true dönerse düşman şu an saldırıyor / saldırı pozisyonunda duruyor
+    private bool HandleAttack()
+    {
+        if (attack == null || player == null) return false;
+
+        if (attack.IsAttacking) return true;
+        if (currentState != EnemyState.Chase) return false;
+        if (!attack.InAttackPosition(player, obstacleMask)) return false;
+
+        facingDirection = ((Vector2)player.position - rb.position).normalized;
+
+        if (attack.IsReady)
+            attack.StartAttack(player);
+
+        return true; // cooldown'da da menzilde durur (uzak düşman geri çekilmez/üstüne yürümez)
+    }
+
+
+
+
+
+
+
+
 }

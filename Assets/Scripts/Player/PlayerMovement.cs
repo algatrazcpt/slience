@@ -30,6 +30,7 @@ public class PlayerMovement : MonoBehaviour
 
     private Rigidbody2D rb;
     private float currentSpeed;
+    public bool CanMove { get; set; } = true;
 
     private void Awake()
     {
@@ -72,6 +73,8 @@ public class PlayerMovement : MonoBehaviour
         MovementInput = Vector2.ClampMagnitude(
             moveAction.action.ReadValue<Vector2>(), 1f
         );
+        if (!CanMove) MovementInput = Vector2.zero;
+
 
         if (MovementInput.sqrMagnitude > 0.01f)
             LastDirection = MovementInput.normalized;
