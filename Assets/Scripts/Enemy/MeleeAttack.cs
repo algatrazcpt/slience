@@ -11,10 +11,11 @@ public class MeleeAttack : EnemyAttack
     {
         float dist = Vector2.Distance(transform.position, player.position);
         var health = player.GetComponentInParent<PlayerHealth>();
-
         if (health != null && dist <= attackRange + hitTolerance)
             health.TakeDamage(damage);
+            Debug.Log("MeeleAttackSucces");
 
+        Debug.Log("MeeleAttack");
         yield break;
     }
 }

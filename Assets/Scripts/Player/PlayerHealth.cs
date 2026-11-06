@@ -7,17 +7,17 @@ public class PlayerHealth : MonoBehaviour
 
     public UnityEvent<float> onDamaged;
     public UnityEvent onDied;
+    [SerializeField] public float current;
+    public bool IsDead => current <= 0f;
 
-    public float Current { get; private set; }
-    public bool IsDead => Current <= 0f;
-
-    private void Awake() => Current = maxHealth;
+    private void Awake() => current = maxHealth;
 
     public void TakeDamage(float amount)
     {
+        Debug.Log("PlayerTakeDamage");
         if (IsDead) return;
 
-        Current = Mathf.Max(0f, Current - amount);
+        current = Mathf.Max(0f, current - amount);
         onDamaged?.Invoke(amount);
 
         if (IsDead)

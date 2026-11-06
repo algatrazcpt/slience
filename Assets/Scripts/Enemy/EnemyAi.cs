@@ -1,11 +1,10 @@
 using UnityEngine;
 using UnityEngine.Events;
 
-
 [RequireComponent(typeof(Rigidbody2D))]
 public class EnemyAI : MonoBehaviour
 {
-    public enum EnemyState { Idle, Chase, Search, Return }
+    public enum EnemyState { Idle, Suspicious, Chase, Search, Return }
 
     public enum StartDirection
     {
@@ -13,18 +12,6 @@ public class EnemyAI : MonoBehaviour
         UpLeft, UpRight, DownLeft, DownRight,
         Custom
     }
-    [Header("Saldırı")]
-    [SerializeField] private EnemyAttack attack;
-
-
-
-
-
-
-
-    [Header("Fark Etme")]
-    public UnityEvent onNoticedPlayer; // Chase'e ilk geçtiği an (ünlem efekti, ses vs. için)
-
 
     [Header("Algı Tipi")]
     [SerializeField] private bool canHear = true;
@@ -34,11 +21,23 @@ public class EnemyAI : MonoBehaviour
     [SerializeField] private Transform player;
     [SerializeField] private float viewDistance = 6f;
     [SerializeField, Range(10f, 360f)] private float viewAngle = 90f;
-    [SerializeField] private LayerMask obstacleMask; // Duvarlar vs. (oyuncu layer'ı EKLEME)
+    [SerializeField] private LayerMask obstacleMask; // Duvarlar (oyuncu layer'ı EKLEME)
+
+    [Header("Fark Etme Süresi")]
+    [Tooltip("Sesi tam fark etmesi için gereken süre (sn)")]
+    [SerializeField] private float hearNoticeTime = 0.8f;
+    [Tooltip("Seni görüp tam fark etmesi için gereken süre (sn)")]
+    [SerializeField] private float seeNoticeTime = 0.5f;
+    [Tooltip("Yakındayken fark etme süresi kısalır")]
+    [SerializeField] private bool closerIsFaster = true;
+    [Tooltip("En yakındayken süre çarpanı (0.3 = süre %30'a düşer)")]
+    [SerializeField, Range(0.1f, 1f)] private float minTimeMultiplier = 0.3f;
+    [Tooltip("Algı kesilince barın sıfırlanma süresi (sn)")]
+    [SerializeField] private float awarenessDecayTime = 2f;
 
     [Header("Başlangıç Yönü")]
     [SerializeField] private StartDirection startDirection = StartDirection.Down;
-    [Tooltip("Sadece StartDirection = Custom iken kullanılır. 0 = sağ, 90 = yukarı, 180 = sol, 270 = aşağı")]
+    [Tooltip("Sadece Custom iken. 0 = sağ, 90 = yukarı, 180 = sol, 270 = aşağı")]
     [SerializeField, Range(0f, 360f)] private float customAngle = 0f;
 
     [Header("Hız")]
@@ -49,18 +48,32 @@ public class EnemyAI : MonoBehaviour
     [SerializeField] private float stopDistance = 0.2f;
     [SerializeField] private float searchDuration = 3f;
 
+    [Header("Saldırı")]
+    [SerializeField] private EnemyAttack attack;
+
     [Header("Components")]
     [SerializeField] private Animator animator;
 
+    [Header("Eventler")]
+    public UnityEvent onSuspicious;   // Şüphelenmeye başladı (?)
+    public UnityEvent onNoticedPlayer; // Tam fark etti (!)
+
     public EnemyState currentState = EnemyState.Idle;
     public bool IsSeeingPlayer { get; private set; }
+    public float Awareness { get; private set; } // 0..1
 
     private Rigidbody2D rb;
     private Vector2 startPosition;
     private Vector2 targetPosition;
+    private Vector2 suspicionPosition;
     private Vector2 moveVelocity;
     private Vector2 facingDirection;
     private float searchTimer;
+
+    // Duyma bilgisi (OnTriggerStay2D -> FixedUpdate)
+    private bool heardThisStep;
+    private Vector2 heardPosition;
+    private float heardCloseness;
 
     private void Awake()
     {
@@ -71,6 +84,9 @@ public class EnemyAI : MonoBehaviour
         if (animator == null)
             animator = GetComponent<Animator>();
 
+        if (attack == null)
+            attack = GetComponent<EnemyAttack>();
+
         if (player == null)
         {
             var pm = FindFirstObjectByType<PlayerMovement>();
@@ -79,8 +95,6 @@ public class EnemyAI : MonoBehaviour
 
         startPosition = rb.position;
         facingDirection = GetStartFacing();
-        if (attack == null)
-            attack = GetComponent<EnemyAttack>();
     }
 
     private Vector2 GetStartFacing()
@@ -102,23 +116,126 @@ public class EnemyAI : MonoBehaviour
         };
     }
 
-    // SES: player'ın ses collider'ı düşmana değerse
+    // ───────────── ALGI ─────────────
+
+    // SES: sadece bilgiyi kaydeder, işi FixedUpdate yapar
     private void OnTriggerStay2D(Collider2D other)
     {
         if (!canHear) return;
         if (!other.TryGetComponent<PlayerSoundEmitter>(out _)) return;
 
-        Notice(other.transform.position);
+        heardThisStep = true;
+        heardPosition = other.transform.position;
+
+        // Ses ne kadar yakınsa (yarıçapa oranla) 1'e yaklaşır
+        float closeness = 0f;
+        if (other is CircleCollider2D circle)
+        {
+            float dist = Vector2.Distance(rb.position, heardPosition);
+            closeness = Mathf.Clamp01(1f - dist / Mathf.Max(circle.radius, 0.01f));
+        }
+        heardCloseness = closeness;
     }
+
+    // TEMAS: gecikme yok, anında fark eder
+    private void OnCollisionEnter2D(Collision2D collision) => TouchCheck(collision.collider);
+    private void OnCollisionStay2D(Collision2D collision) => TouchCheck(collision.collider);
+
+    private void TouchCheck(Collider2D other)
+    {
+        var pm = other.GetComponentInParent<PlayerMovement>();
+        if (pm == null) return;
+
+        Notice(pm.transform.position);
+    }
+
+    private void UpdateAwareness(bool seeing)
+    {
+        bool hearing = heardThisStep;
+        heardThisStep = false;
+
+        // Zaten fark etti: algıladıkça hedefi anında güncelle
+        if (currentState == EnemyState.Chase)
+        {
+            if (seeing) targetPosition = player.position;
+            else if (hearing) targetPosition = heardPosition;
+
+            Awareness = 1f;
+            return;
+        }
+
+        if (seeing || hearing)
+        {
+            Vector2 source;
+            float noticeTime;
+            float closeness;
+
+            if (seeing)
+            {
+                source = player.position;
+                noticeTime = seeNoticeTime;
+                float dist = Vector2.Distance(rb.position, source);
+                closeness = Mathf.Clamp01(1f - dist / viewDistance);
+            }
+            else
+            {
+                source = heardPosition;
+                noticeTime = hearNoticeTime;
+                closeness = heardCloseness;
+            }
+
+            if (closerIsFaster)
+                noticeTime *= Mathf.Lerp(1f, minTimeMultiplier, closeness);
+
+            // Şüphelenmeye başladı
+            if (currentState != EnemyState.Suspicious)
+            {
+                currentState = EnemyState.Suspicious;
+                onSuspicious?.Invoke();
+            }
+
+            suspicionPosition = source;
+            facingDirection = (suspicionPosition - rb.position).normalized; // sesin/görüşün geldiği yöne bak
+
+            Awareness += Time.fixedDeltaTime / Mathf.Max(noticeTime, 0.01f);
+
+            if (Awareness >= 1f)
+                Notice(source);
+        }
+        else
+        {
+            Awareness -= Time.fixedDeltaTime / Mathf.Max(awarenessDecayTime, 0.01f);
+
+            if (Awareness <= 0f)
+            {
+                Awareness = 0f;
+
+                if (currentState == EnemyState.Suspicious)
+                    currentState = EnemyState.Return; // yanılmışım deyip yerine döner
+            }
+        }
+    }
+
+    // Duyma, görme, temas sonunda buraya çıkar
+    private void Notice(Vector2 position)
+    {
+        if (currentState != EnemyState.Chase)
+            onNoticedPlayer?.Invoke();
+
+        Awareness = 1f;
+        targetPosition = position;
+        currentState = EnemyState.Chase;
+    }
+
+    // ───────────── ANA DÖNGÜ ─────────────
 
     private void FixedUpdate()
     {
-        // GÖRME
         IsSeeingPlayer = canSee && CheckVision();
-        if (IsSeeingPlayer)
-            Notice(player.position);
+        UpdateAwareness(IsSeeingPlayer);
 
         moveVelocity = Vector2.zero;
+
         if (HandleAttack())
         {
             rb.linearVelocity = Vector2.zero;
@@ -126,15 +243,16 @@ public class EnemyAI : MonoBehaviour
             return;
         }
 
-
         switch (currentState)
         {
             case EnemyState.Idle:
+            case EnemyState.Suspicious: // durup bakınır
                 break;
 
             case EnemyState.Chase:
                 if (MoveTo(targetPosition, chaseSpeed))
                 {
+                    Awareness = 0f;
                     searchTimer = searchDuration;
                     currentState = EnemyState.Search;
                 }
@@ -149,7 +267,7 @@ public class EnemyAI : MonoBehaviour
             case EnemyState.Return:
                 if (MoveTo(startPosition, returnSpeed))
                 {
-                    facingDirection = GetStartFacing(); // başlangıç yönüne geri dön
+                    facingDirection = GetStartFacing();
                     currentState = EnemyState.Idle;
                 }
                 break;
@@ -163,6 +281,23 @@ public class EnemyAI : MonoBehaviour
         UpdateAnimation();
     }
 
+    // true dönerse düşman şu an saldırıyor / saldırı pozisyonunda duruyor
+    private bool HandleAttack()
+    {
+        if (attack == null || player == null) return false;
+
+        if (attack.IsAttacking) return true;
+        if (currentState != EnemyState.Chase) return false;
+        if (!attack.InAttackPosition(player, obstacleMask)) return false;
+
+        facingDirection = ((Vector2)player.position - rb.position).normalized;
+
+        if (attack.IsReady)
+            attack.StartAttack(player);
+
+        return true;
+    }
+
     private bool CheckVision()
     {
         if (player == null) return false;
@@ -172,39 +307,11 @@ public class EnemyAI : MonoBehaviour
         float distance = toPlayer.magnitude;
 
         if (distance > viewDistance) return false;
-
-        // Açı kontrolü
         if (Vector2.Angle(facingDirection, toPlayer) > viewAngle * 0.5f) return false;
-
-        // Arada duvar var mı?
-        if (Physics2D.Raycast(origin, toPlayer.normalized, distance, obstacleMask))
-            return false;
+        if (Physics2D.Raycast(origin, toPlayer.normalized, distance, obstacleMask)) return false;
 
         return true;
     }
-
-    // TEMAS: player'ın gövdesine çarparsa fark eder
-    private void OnCollisionEnter2D(Collision2D collision) => TouchCheck(collision.collider);
-    private void OnCollisionStay2D(Collision2D collision) => TouchCheck(collision.collider);
-
-    private void TouchCheck(Collider2D other)
-    {
-        var pm = other.GetComponentInParent<PlayerMovement>();
-        if (pm == null) return;
-
-        Notice(pm.transform.position);
-    }
-
-    // Duyma, görme, temas hepsi buraya çıkıyor
-    private void Notice(Vector2 position)
-    {
-        if (currentState != EnemyState.Chase)
-            onNoticedPlayer?.Invoke();
-
-        targetPosition = position;
-        currentState = EnemyState.Chase;
-    }
-
 
     // Hedefe vardıysa true döner
     private bool MoveTo(Vector2 target, float speed)
@@ -232,11 +339,14 @@ public class EnemyAI : MonoBehaviour
     {
         if (!canSee) return;
 
-        // Edit modunda dropdown'dan seçtiğin yönü anında gösterir
         Vector2 facing = Application.isPlaying ? facingDirection : GetStartFacing();
         float half = viewAngle * 0.5f;
 
-        Gizmos.color = IsSeeingPlayer ? Color.red : Color.green;
+        // Yeşil: sakin, Sarı: şüpheli, Kırmızı: fark etti
+        Gizmos.color = currentState == EnemyState.Chase ? Color.red
+                     : Awareness > 0f ? Color.yellow
+                     : Color.green;
+
         Vector3 left = Quaternion.Euler(0, 0, -half) * facing * viewDistance;
         Vector3 right = Quaternion.Euler(0, 0, half) * facing * viewDistance;
 
@@ -244,28 +354,4 @@ public class EnemyAI : MonoBehaviour
         Gizmos.DrawLine(transform.position, transform.position + right);
         Gizmos.DrawLine(transform.position + left, transform.position + right);
     }
-    // true dönerse düşman şu an saldırıyor / saldırı pozisyonunda duruyor
-    private bool HandleAttack()
-    {
-        if (attack == null || player == null) return false;
-
-        if (attack.IsAttacking) return true;
-        if (currentState != EnemyState.Chase) return false;
-        if (!attack.InAttackPosition(player, obstacleMask)) return false;
-
-        facingDirection = ((Vector2)player.position - rb.position).normalized;
-
-        if (attack.IsReady)
-            attack.StartAttack(player);
-
-        return true; // cooldown'da da menzilde durur (uzak düşman geri çekilmez/üstüne yürümez)
-    }
-
-
-
-
-
-
-
-
 }
